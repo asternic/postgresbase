@@ -91,5 +91,3 @@ require (
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
 )
-
-replace github.com/AlperRehaYAZGAN/postgresbase => github.com/asternic/postgresbase v0.0.0-20250605205417-d50cd8ed7481
