@@ -30,7 +30,7 @@ var defaultThumbSizes = []string{"100x100"}
 func bindFileApi(app core.App, rg *echo.Group) {
 	api := fileApi{
 		app:             app,
-		thumbGenSem:     semaphore.NewWeighted(int64(runtime.NumCPU() + 1)), // the value is arbitrary chosen and may change in the future
+		thumbGenSem:     semaphore.NewWeighted(int64(runtime.NumCPU() + 2)), // the value is arbitrary chosen and may change in the future
 		thumbGenPending: new(singleflight.Group),
 		thumbGenMaxWait: 60 * time.Second,
 	}
@@ -111,7 +111,7 @@ func (api *fileApi) download(c echo.Context) error {
 
 	options, ok := fileField.Options.(*schema.FileOptions)
 	if !ok {
-		return NewBadRequestError("", errors.New("Failed to load file options."))
+		return NewBadRequestError("", errors.New("failed to load file options"))
 	}
 
 	// check whether the request is authorized to view the protected file
@@ -122,6 +122,7 @@ func (api *fileApi) download(c echo.Context) error {
 
 		// create a copy of the cached request data and adjust it for the current auth model
 		requestInfo := *RequestInfo(c)
+		requestInfo.Context = models.RequestInfoContextProtectedFile
 		requestInfo.Admin = nil
 		requestInfo.AuthRecord = nil
 		if adminOrAuthRecord != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/AlperRehaYAZGAN/postgresbase/tools/filesystem"
 	"github.com/AlperRehaYAZGAN/postgresbase/tools/list"
@@ -46,6 +47,7 @@ const (
 	FieldNamePasswordHash           string = "passwordHash"
 	FieldNameLastResetSentAt        string = "lastResetSentAt"
 	FieldNameLastVerificationSentAt string = "lastVerificationSentAt"
+	FieldNameLastLoginAlertSentAt   string = "lastLoginAlertSentAt"
 )
 
 // BaseModelFieldNames returns the field names that all models have (id, created, updated).
@@ -77,6 +79,7 @@ func AuthFieldNames() []string {
 		FieldNamePasswordHash,
 		FieldNameLastResetSentAt,
 		FieldNameLastVerificationSentAt,
+		FieldNameLastLoginAlertSentAt,
 	}
 }
 
@@ -192,12 +195,13 @@ func (f *SchemaField) UnmarshalJSON(data []byte) error {
 }
 
 // Validate makes `SchemaField` validatable by implementing [validation.Validatable] interface.
-func (f SchemaField) Validate() error {
+func (f SchemaField) original_Validate() error {
 	// init field options (if not already)
 	f.InitOptions()
 
 	excludeNames := BaseModelFieldNames()
 	// exclude special filter literals
+	// !CHANGED: Change rowid to ctid to avoid postgress conflict
 	excludeNames = append(excludeNames, "null", "true", "false", "_ctid_")
 	// exclude system literals
 	excludeNames = append(excludeNames, SystemFieldNames()...)
@@ -211,6 +215,7 @@ func (f SchemaField) Validate() error {
 			validation.Length(1, 255),
 			validation.Match(schemaFieldNameRegex),
 			validation.NotIn(list.ToInterfaceSlice(excludeNames)...),
+			validation.By(f.checkForVia),
 		),
 		validation.Field(&f.Type, validation.Required, validation.In(list.ToInterfaceSlice(FieldTypes())...)),
 		// currently file fields cannot be unique because a proper
@@ -226,6 +231,20 @@ func (f *SchemaField) checkOptions(value any) error {
 	}
 
 	return v.Validate()
+}
+
+// @todo merge with the collections during the refactoring
+func (f *SchemaField) checkForVia(value any) error {
+	v, _ := value.(string)
+	if v == "" {
+		return nil
+	}
+
+	if strings.Contains(strings.ToLower(v), "_via_") {
+		return validation.NewError("validation_invalid_name", "The name of the field cannot contain '_via_'.")
+	}
+
+	return nil
 }
 
 // InitOptions initializes the current field options based on its type.
@@ -710,3 +729,69 @@ type UserOptions struct {
 func (o UserOptions) Validate() error {
 	return nil
 }
+
+func (f SchemaField) Validate(collectionType ...string) error {
+	// init field options (if not already)
+	if err := f.InitOptions(); err != nil {
+		// If options cannot be initialized, it's a fundamental problem with the field definition.
+		return validation.Errors{"options": validation.NewError("validation_options_init_failed", "Failed to initialize field options: "+err.Error())}
+	}
+
+	isViewCollection := false
+	if len(collectionType) > 0 && collectionType[0] == "view" { // Use a constant like models.CollectionTypeView
+		isViewCollection = true
+	}
+
+	nameValidationRules := []validation.Rule{
+		validation.Required,
+		validation.Length(1, 255),
+		validation.Match(schemaFieldNameRegex),
+	}
+
+	if !isViewCollection {
+		excludeNames := BaseModelFieldNames()
+		excludeNames = append(excludeNames, "null", "true", "false", "_ctid_") // special filter literals
+		excludeNames = append(excludeNames, SystemFieldNames()...)           // system literals
+		nameValidationRules = append(nameValidationRules, validation.NotIn(list.ToInterfaceSlice(excludeNames)...))
+	}
+
+	return validation.ValidateStruct(&f,
+		validation.Field(&f.Options, validation.Required, validation.By(f.CheckOptions)),
+		validation.Field(&f.Id, validation.Required, validation.Length(5, 255)),
+		validation.Field(&f.Name, nameValidationRules...), // Apply conditional name rules
+		validation.Field(&f.Type, validation.Required, validation.In(list.ToInterfaceSlice(FieldTypes())...)),
+		validation.Field(&f.Unique, validation.When(f.Type == FieldTypeFile, validation.Empty)),
+	)
+}
+
+// CheckOptions is a public method to validate only the options of a SchemaField.
+// It's used by CollectionUpsert to validate view schemas more leniently.
+func (f *SchemaField) CheckOptions(value any) error {
+	// Ensure options are initialized before validating them
+	if err := f.InitOptions(); err != nil {
+		// This case might occur if f.Options was nil or unmarshalable before this call
+		// which shouldn't happen if UnmarshalJSON or NewCollectionUpsert handles it.
+		// For safety, try to use the passed 'value' if f.Options is still not a FieldOptions.
+		if _, ok := f.Options.(FieldOptions); !ok {
+			if v, ok := value.(FieldOptions); ok {
+				return v.Validate()
+			}
+			return validation.NewError("validation_options_not_initialized", "Field options are not initialized or invalid type.")
+		}
+	}
+
+	// Now f.Options should be an initialized FieldOptions type
+	v, ok := f.Options.(FieldOptions)
+	if !ok {
+		// This path means InitOptions succeeded but f.Options is still not FieldOptions, which is contradictory
+		// unless InitOptions can set f.Options to something else based on type, which it does.
+		// The 'value' parameter here is the actual f.Options from the struct.
+		if val, ok := value.(FieldOptions); ok {
+			return val.Validate()
+		}
+		return validation.NewError("validation_invalid_options_type", "Field options are of an unexpected type after initialization.")
+	}
+
+	return v.Validate()
+}
+

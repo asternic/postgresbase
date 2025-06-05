@@ -132,7 +132,7 @@ func (s *Schema) AddField(newField *SchemaField) {
 //
 // Internally calls each individual field's validator and additionally
 // checks for invalid renamed fields and field name duplications.
-func (s Schema) Validate() error {
+func (s Schema) original_Validate() error {
 	return validation.Validate(&s.fields, validation.By(func(value any) error {
 		fields := s.fields // use directly the schema value to avoid unnecessary interface casting
 
@@ -171,6 +171,64 @@ func (s Schema) Validate() error {
 		return nil
 	}))
 }
+
+
+func (s Schema) Validate(collectionType ...string) error {
+	// The actual collectionType string to pass to SchemaField.Validate
+	ct := ""
+	if len(collectionType) > 0 {
+		ct = collectionType[0]
+	}
+
+	// Validate individual fields first
+	fieldErrors := validation.Errors{}
+	for i, field := range s.fields {
+		if err := field.Validate(ct); err != nil { // Pass collectionType here
+			fieldErrors[strconv.Itoa(i)] = err
+		}
+	}
+	if len(fieldErrors) > 0 {
+		return fieldErrors
+	}
+
+	// Then validate the schema as a whole for duplicates etc.
+	return validation.Validate(&s.fields, validation.By(func(value any) error {
+		fields := s.fields // use directly the schema value
+
+		ids := []string{}
+		names := []string{}
+		for i, field := range fields {
+			// ID duplication check
+			if list.ExistInSlice(field.Id, ids) {
+				return validation.Errors{
+					strconv.Itoa(i): validation.Errors{
+						"id": validation.NewError(
+							"validation_duplicated_field_id",
+							"Duplicated or invalid schema field id.", // Simplified message
+						),
+					},
+				}
+			}
+			ids = append(ids, field.Id)
+
+			// Name duplication check (case-insensitive)
+			nameLower := strings.ToLower(field.Name)
+			if list.ExistInSlice(nameLower, names) {
+				return validation.Errors{
+					strconv.Itoa(i): validation.Errors{
+						"name": validation.NewError(
+							"validation_duplicated_field_name",
+							"Duplicated or invalid schema field name.", // Simplified message
+						),
+					},
+				}
+			}
+			names = append(names, nameLower)
+		}
+		return nil
+	}))
+}
+
 
 // MarshalJSON implements the [json.Marshaler] interface.
 func (s Schema) MarshalJSON() ([]byte, error) {

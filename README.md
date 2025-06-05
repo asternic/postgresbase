@@ -44,10 +44,17 @@ go mod download
 # 1. postgres://user:pass@localhost/logs?sslmode=disable
 # 2. minio: UI runs on port 9001 and API on 9000  (minio123:minio123)
 # 2. s3://minio123:minio123@localhost:9000/public
-# (dont forget to manually create bucket called "public" via web ui to establish s3 connection from pocketbase)
+# 2.1. (dont forget to manually create bucket called "public" via web ui to establish s3 connection from pocketbase localhost:9001 user:minio123 pass:minio123 )
+# 2.2. Create new access key http://localhost:9001/access-keys and save it locally as we will use it later
+# 2.3. Configure the S3 file storage from pd http://127.0.0.1:8090/_/?#/settings/storage usin the following
+# 2.3. Endpoint: http://localhost:9000/public
+# 2.3. Bucket: public
+# 2.3. Region: us-east-1
+# 2.3. Access key & secret use the one you create at step 2.2
+# 2.3. Save Changes
 # 3. mailhog: port: SMTP-1025 and UI-8025
 # 3. smtp://localhost:1025 - http://localhost:8025
-docker-compose up -d
+docker compose up -d
 
 # before run the project, you need to create and set RSA Public key pair for JWT before run the application.
 # you can use following command to generate RSA key pair

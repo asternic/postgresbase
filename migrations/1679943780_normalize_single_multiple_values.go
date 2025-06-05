@@ -39,7 +39,7 @@ func normalizeMultivaluerFields(db dbx.Builder) error {
 			}
 
 			var updateQuery *dbx.Query
-
+			// !CHANGED: We write json functions for postgres in migration files to support json equivalent operations from Pocketbase.
 			if opt.IsMultiple() {
 				updateQuery = dao.DB().NewQuery(fmt.Sprintf(
 					`UPDATE {{%s}} set [[%s]] = (
@@ -65,7 +65,7 @@ func normalizeMultivaluerFields(db dbx.Builder) error {
 				))
 			} else {
 				updateQuery = dao.DB().NewQuery(fmt.Sprintf(
-					// set-returning functions are not allowed in UPDATE at character
+					// !CHANGED: set-returning functions are not allowed in UPDATE at character
 					`UPDATE {{%s}} SET [[%s]] = (
 						CASE
 							WHEN COALESCE([[%s]], '[]') = '[]'

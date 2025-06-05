@@ -371,7 +371,7 @@ type recordData struct {
 func (api *realtimeApi) broadcastRecord(action string, record *models.Record, dryCache bool) error {
 	collection := record.Collection()
 	if collection == nil {
-		return errors.New("[broadcastRecord] Record collection not set.")
+		return errors.New("[broadcastRecord] Record collection not set")
 	}
 
 	clients := api.app.SubscriptionsBroker().Clients()
@@ -409,6 +409,7 @@ func (api *realtimeApi) broadcastRecord(action string, record *models.Record, dr
 
 				// mock request data
 				requestInfo := &models.RequestInfo{
+					Context: models.RequestInfoContextRealtime,
 					Method:  "GET",
 					Query:   options.Query,
 					Headers: options.Headers,
@@ -573,7 +574,7 @@ func (api *realtimeApi) canAccessRecord(
 	}
 
 	ruleFunc := func(q *dbx.SelectQuery) error {
-		resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), record.Collection(), requestInfo, false)
+		resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB().(*dbx.DB), record.Collection(), requestInfo, false)
 
 		expr, err := search.FilterData(filter).BuildExpr(resolver)
 		if err != nil {

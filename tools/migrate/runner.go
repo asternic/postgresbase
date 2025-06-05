@@ -203,6 +203,7 @@ func (r *Runner) Down(toRevertCount int) ([]string, error) {
 }
 
 func (r *Runner) createMigrationsTable() error {
+	// !CHANGED: replace applied column from int to TIMESTAMPTZ
 	rawQuery := fmt.Sprintf(
 		"CREATE TABLE IF NOT EXISTS %v (file VARCHAR(255) PRIMARY KEY NOT NULL, applied TIMESTAMPTZ NOT NULL)",
 		r.db.QuoteTableName(r.tableName),

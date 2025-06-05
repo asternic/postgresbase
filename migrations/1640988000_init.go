@@ -34,6 +34,7 @@ func Register(
 }
 
 func init() {
+	// !CHANGED: We write json functions for postgres in migration files to support json equivalent operations from Pocketbase.
 	AppMigrations.Register(func(db dbx.Builder) error {
 		_, tablesErr := db.NewQuery(`
 			create or replace function json_valid(p_json text) returns boolean as $$

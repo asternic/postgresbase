@@ -31,7 +31,7 @@ func TestSystemFieldNames(t *testing.T) {
 
 func TestAuthFieldNames(t *testing.T) {
 	result := schema.AuthFieldNames()
-	expected := 8
+	expected := 9
 
 	if len(result) != expected {
 		t.Fatalf("Expected %d auth field names, got %d (%v)", expected, len(result), result)
@@ -299,6 +299,15 @@ func TestSchemaFieldValidate(t *testing.T) {
 			[]string{"name"},
 		},
 		{
+			"name with _via_",
+			schema.SchemaField{
+				Type: schema.FieldTypeText,
+				Id:   "1234567890",
+				Name: "a_via_b",
+			},
+			[]string{"name"},
+		},
+		{
 			"reserved name (null)",
 			schema.SchemaField{
 				Type: schema.FieldTypeText,
@@ -326,7 +335,7 @@ func TestSchemaFieldValidate(t *testing.T) {
 			[]string{"name"},
 		},
 		{
-			"reserved name (_ctid_)",
+			"reserved name (_ctid_)", // !CHANGED: Change rowid to ctid to avoid postgress conflict
 			schema.SchemaField{
 				Type: schema.FieldTypeText,
 				Id:   "1234567890",

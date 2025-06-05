@@ -1,4 +1,4 @@
-/.vscode/
+/.vscode/*
 .idea
 
 .DS_Store
@@ -24,3 +24,5 @@ pb_data/*
 server
 *.exe
 keys/*
+.env
+!.vscode/launch.json

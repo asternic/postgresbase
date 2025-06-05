@@ -44,6 +44,7 @@ func RequestInfo(c echo.Context) *models.RequestInfo {
 	}
 
 	result := &models.RequestInfo{
+		Context: models.RequestInfoContextDefault,
 		Method:  c.Request().Method,
 		Query:   map[string]any{},
 		Data:    map[string]any{},
@@ -78,7 +79,7 @@ func RecordAuthResponse(
 	finalizers ...func(token string) error,
 ) error {
 	if !authRecord.Verified() && authRecord.Collection().AuthOptions().OnlyVerified {
-		return NewForbiddenError("Please verify your email first.", nil)
+		return NewForbiddenError("Please verify your account first.", nil)
 	}
 
 	token, tokenErr := tokens.NewRecordAuthToken(app, authRecord)
@@ -140,7 +141,7 @@ func RecordAuthResponse(
 // EnrichRecord parses the request context and enrich the provided record:
 //   - expands relations (if defaultExpands and/or ?expand query param is set)
 //   - ensures that the emails of the auth record and its expanded auth relations
-//     are visibe only for the current logged admin, record owner or record with manage access
+//     are visible only for the current logged admin, record owner or record with manage access
 func EnrichRecord(c echo.Context, dao *daos.Dao, record *models.Record, defaultExpands ...string) error {
 	return EnrichRecords(c, dao, []*models.Record{record}, defaultExpands...)
 }
@@ -148,12 +149,12 @@ func EnrichRecord(c echo.Context, dao *daos.Dao, record *models.Record, defaultE
 // EnrichRecords parses the request context and enriches the provided records:
 //   - expands relations (if defaultExpands and/or ?expand query param is set)
 //   - ensures that the emails of the auth records and their expanded auth relations
-//     are visibe only for the current logged admin, record owner or record with manage access
+//     are visible only for the current logged admin, record owner or record with manage access
 func EnrichRecords(c echo.Context, dao *daos.Dao, records []*models.Record, defaultExpands ...string) error {
 	requestInfo := RequestInfo(c)
 
 	if err := autoIgnoreAuthRecordsEmailVisibility(dao, records, requestInfo); err != nil {
-		return fmt.Errorf("Failed to resolve email visibility: %w", err)
+		return fmt.Errorf("failed to resolve email visibility: %w", err)
 	}
 
 	expands := defaultExpands
@@ -166,7 +167,7 @@ func EnrichRecords(c echo.Context, dao *daos.Dao, records []*models.Record, defa
 
 	errs := dao.ExpandRecords(records, expands, expandFetch(dao, requestInfo))
 	if len(errs) > 0 {
-		return fmt.Errorf("Failed to expand: %v", errs)
+		return fmt.Errorf("failed to expand: %v", errs)
 	}
 
 	return nil
@@ -184,11 +185,11 @@ func expandFetch(
 			}
 
 			if relCollection.ViewRule == nil {
-				return fmt.Errorf("Only admins can view collection %q records", relCollection.Name)
+				return fmt.Errorf("only admins can view collection %q records", relCollection.Name)
 			}
 
 			if *relCollection.ViewRule != "" {
-				resolver := resolvers.NewRecordFieldResolver(dao, relCollection, requestInfo, true)
+				resolver := resolvers.NewRecordFieldResolver(dao, dao.DB().(*dbx.DB), relCollection, requestInfo, true)
 				expr, err := search.FilterData(*(relCollection.ViewRule)).BuildExpr(resolver)
 				if err != nil {
 					return err
@@ -254,7 +255,7 @@ func autoIgnoreAuthRecordsEmailVisibility(
 		Select(dao.DB().QuoteSimpleColumnName(collection.Name) + ".id").
 		AndWhere(dbx.In(dao.DB().QuoteSimpleColumnName(collection.Name)+".id", recordIds...))
 
-	resolver := resolvers.NewRecordFieldResolver(dao, collection, requestInfo, true)
+	resolver := resolvers.NewRecordFieldResolver(dao, dao.DB().(*dbx.DB), collection, requestInfo, true)
 	expr, err := search.FilterData(*authOptions.ManageRule).BuildExpr(resolver)
 	if err != nil {
 		return err
@@ -300,7 +301,7 @@ func hasAuthManageAccess(
 	}
 
 	ruleFunc := func(q *dbx.SelectQuery) error {
-		resolver := resolvers.NewRecordFieldResolver(dao, record.Collection(), requestInfo, true)
+		resolver := resolvers.NewRecordFieldResolver(dao, dao.DB().(*dbx.DB), record.Collection(), requestInfo, true)
 		expr, err := search.FilterData(*manageRule).BuildExpr(resolver)
 		if err != nil {
 			return err

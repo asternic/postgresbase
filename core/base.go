@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -379,20 +380,30 @@ func (app *BaseApp) Bootstrap() error {
 // (eg. closing db connections).
 func (app *BaseApp) ResetBootstrapState() error {
 	if app.Dao() != nil {
-		if err := app.Dao().ConcurrentDB().(*dbx.DB).Close(); err != nil {
-			return err
+		// Ensure DB() returns *dbx.DB for Close()
+		if dbToClose, ok := app.Dao().ConcurrentDB().(*dbx.DB); ok {
+			if err := dbToClose.Close(); err != nil {
+				return err
+			}
 		}
-		if err := app.Dao().NonconcurrentDB().(*dbx.DB).Close(); err != nil {
-			return err
+		if dbToClose, ok := app.Dao().NonconcurrentDB().(*dbx.DB); ok {
+			if err := dbToClose.Close(); err != nil {
+				return err
+			}
 		}
 	}
 
 	if app.LogsDao() != nil {
-		if err := app.LogsDao().ConcurrentDB().(*dbx.DB).Close(); err != nil {
-			return err
+		// Ensure LogsDB() returns *dbx.DB for Close()
+		if dbToClose, ok := app.LogsDao().ConcurrentDB().(*dbx.DB); ok {
+			if err := dbToClose.Close(); err != nil {
+				return err
+			}
 		}
-		if err := app.LogsDao().NonconcurrentDB().(*dbx.DB).Close(); err != nil {
-			return err
+		if dbToClose, ok := app.LogsDao().NonconcurrentDB().(*dbx.DB); ok {
+			if err := dbToClose.Close(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -413,12 +424,9 @@ func (app *BaseApp) DB() *dbx.DB {
 		return nil
 	}
 
-	db, ok := app.Dao().DB().(*dbx.DB)
-	if !ok {
-		return nil
-	}
-
-	return db
+	// The Dao's DB() method returns dbx.Builder, which could be *dbx.DB or *dbx.Tx.
+	// To get the root *dbx.DB, use Dao().RootDB().
+	return app.Dao().RootDB()
 }
 
 // Dao returns the default app Dao instance.
@@ -436,13 +444,8 @@ func (app *BaseApp) LogsDB() *dbx.DB {
 	if app.LogsDao() == nil {
 		return nil
 	}
-
-	db, ok := app.LogsDao().DB().(*dbx.DB)
-	if !ok {
-		return nil
-	}
-
-	return db
+	// Similar to DB(), use LogsDao().RootDB()
+	return app.LogsDao().RootDB()
 }
 
 // LogsDao returns the app logs Dao instance.
@@ -599,10 +602,10 @@ func (app *BaseApp) RefreshSettings() error {
 		return err
 	}
 
-	// reload handler level (if initialized and not in dev mode)
-	if !app.IsDev() && app.Logger() != nil {
+	// reload handler level (if initialized)
+	if app.Logger() != nil {
 		if h, ok := app.Logger().Handler().(*logger.BatchHandler); ok {
-			h.SetLevel(slog.Level(app.settings.Logs.MinLevel))
+			h.SetLevel(app.getLoggerMinLevel())
 		}
 	}
 
@@ -1035,7 +1038,7 @@ func (app *BaseApp) initLogsDB() error {
 	nonconcurrentDB.DB().SetMaxIdleConns(1)
 	nonconcurrentDB.DB().SetConnMaxIdleTime(3 * time.Minute)
 
-	app.logsDao = daos.NewMultiDB(concurrentDB, nonconcurrentDB)
+	app.logsDao = daos.NewMultiDB(concurrentDB, nonconcurrentDB, concurrentDB)
 
 	return nil
 }
@@ -1077,13 +1080,13 @@ func (app *BaseApp) initDataDB() error {
 		concurrentDB.ExecLogFunc = nonconcurrentDB.ExecLogFunc
 	}
 
-	app.dao = app.createDaoWithHooks(concurrentDB, nonconcurrentDB)
+	app.dao = app.createDaoWithHooks(concurrentDB, nonconcurrentDB, concurrentDB)
 
 	return nil
 }
 
-func (app *BaseApp) createDaoWithHooks(concurrentDB, nonconcurrentDB dbx.Builder) *daos.Dao {
-	dao := daos.NewMultiDB(concurrentDB, nonconcurrentDB)
+func (app *BaseApp) createDaoWithHooks(concurrentDB, nonconcurrentDB dbx.Builder, rootDB *dbx.DB) *daos.Dao {
+	dao := daos.NewMultiDB(concurrentDB, nonconcurrentDB, rootDB)
 
 	dao.BeforeCreateFunc = func(eventDao *daos.Dao, m models.Model, action func() error) error {
 		e := new(ModelEvent)
@@ -1161,7 +1164,9 @@ func (app *BaseApp) registerDefaultHooks() {
 	// try to delete the storage files from deleted Collection, Records, etc. model
 	app.OnModelAfterDelete().Add(func(e *ModelEvent) error {
 		if m, ok := e.Model.(models.FilesManager); ok && m.BaseFilesPath() != "" {
-			prefix := m.BaseFilesPath()
+			// ensure that there is a trailing slash so that the list iterator could start walking from the prefix
+			// (https://github.com/pocketbase/pocketbase/discussions/5246#discussioncomment-10128955)
+			prefix := strings.TrimRight(m.BaseFilesPath(), "/") + "/"
 
 			// run in the background for "optimistic" delete to avoid
 			// blocking the delete transaction
@@ -1182,6 +1187,29 @@ func (app *BaseApp) registerDefaultHooks() {
 	if err := app.initAutobackupHooks(); err != nil {
 		app.Logger().Error("Failed to init auto backup hooks", slog.String("error", err.Error()))
 	}
+
+	registerCachedCollectionsAppHooks(app)
+}
+
+// getLoggerMinLevel returns the logger min level based on the
+// app configurations (dev mode, settings, etc.).
+//
+// If not in dev mode - returns the level from the app settings.
+//
+// If the app is in dev mode it returns -9999 level allowing to print
+// practically all logs to the terminal.
+// In this case DB logs are still filtered but the checks for the min level are done
+// in the BatchOptions.BeforeAddFunc instead of the slog.Handler.Enabled() method.
+func (app *BaseApp) getLoggerMinLevel() slog.Level {
+	var minLevel slog.Level
+
+	if app.IsDev() {
+		minLevel = -9999
+	} else if app.Settings() != nil {
+		minLevel = slog.Level(app.Settings().Logs.MinLevel)
+	}
+
+	return minLevel
 }
 
 func (app *BaseApp) initLogger() error {
@@ -1189,20 +1217,8 @@ func (app *BaseApp) initLogger() error {
 	ticker := time.NewTicker(duration)
 	done := make(chan bool)
 
-	// Apply the min level only if it is not in develop
-	// to allow printing the logs to the console.
-	//
-	// DB logs are still filtered but the checks for the min level are done
-	// in the BatchOptions.BeforeAddFunc instead of the slog.Handler.Enabled() method.
-	var minLevel slog.Level
-	if app.IsDev() {
-		minLevel = -9999
-	} else if app.Settings() != nil {
-		minLevel = slog.Level(app.Settings().Logs.MinLevel)
-	}
-
 	handler := logger.NewBatchHandler(logger.BatchOptions{
-		Level:     minLevel,
+		Level:     app.getLoggerMinLevel(),
 		BatchSize: 200,
 		BeforeAddFunc: func(ctx context.Context, log *logger.Log) bool {
 			if app.IsDev() {
@@ -1246,14 +1262,14 @@ func (app *BaseApp) initLogger() error {
 				return nil
 			})
 
+			// @todo replace with cron so that it doesn't rely on the logs write
+			//
 			// delete old logs
 			// ---
-			logsMaxDays := app.Settings().Logs.MaxDays
 			now := time.Now()
 			lastLogsDeletedAt := cast.ToTime(app.Store().Get("lastLogsDeletedAt"))
-			daysDiff := now.Sub(lastLogsDeletedAt).Hours() * 24
-			if daysDiff > float64(logsMaxDays) {
-				deleteErr := app.LogsDao().DeleteOldLogs(now.AddDate(0, 0, -1*logsMaxDays))
+			if now.Sub(lastLogsDeletedAt).Hours() >= 6 {
+				deleteErr := app.LogsDao().DeleteOldLogs(now.AddDate(0, 0, -1*app.Settings().Logs.MaxDays))
 				if deleteErr == nil {
 					app.Store().Set("lastLogsDeletedAt", now)
 				} else {
@@ -1271,7 +1287,7 @@ func (app *BaseApp) initLogger() error {
 		for {
 			select {
 			case <-done:
-				handler.WriteAll(ctx)
+				return
 			case <-ticker.C:
 				handler.WriteAll(ctx)
 			}
@@ -1281,8 +1297,13 @@ func (app *BaseApp) initLogger() error {
 	app.logger = slog.New(handler)
 
 	app.OnTerminate().PreAdd(func(e *TerminateEvent) error {
+		// write all remaining logs before ticker.Stop to avoid races with ResetBootstrap user calls
+		handler.WriteAll(context.Background())
+
 		ticker.Stop()
+
 		done <- true
+
 		return nil
 	})
 

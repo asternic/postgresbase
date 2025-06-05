@@ -121,7 +121,7 @@ func (dao *Dao) FindCollectionReferences(collection *models.Collection, excludeI
 // - is referenced as part of a relation field in another collection
 func (dao *Dao) DeleteCollection(collection *models.Collection) error {
 	if collection.System {
-		return fmt.Errorf("System collection %q cannot be deleted.", collection.Name)
+		return fmt.Errorf("system collection %q cannot be deleted", collection.Name)
 	}
 
 	// ensure that there aren't any existing references.
@@ -135,8 +135,21 @@ func (dao *Dao) DeleteCollection(collection *models.Collection) error {
 		for ref := range result {
 			names = append(names, ref.Name)
 		}
-		return fmt.Errorf("The collection %q has external relation field references (%s).", collection.Name, strings.Join(names, ", "))
+		return fmt.Errorf("the collection %q has external relation field references (%s)", collection.Name, strings.Join(names, ", "))
 	}
+    var rootDb *dbx.DB
+    if cdb, ok := dao.ConcurrentDB().(*dbx.DB); ok {
+        rootDb = cdb
+    } else if dbInstance, ok := dao.DB().(*dbx.DB); ok {
+        rootDb = dbInstance
+    } else {
+        if ncDB, ok := dao.NonconcurrentDB().(*dbx.DB); ok {
+            rootDb = ncDB
+        } else {
+            return errors.New("DeleteCollection: could not obtain root *dbx.DB instance from current DAO for quoting")
+        }
+    }
+	fmt.Printf("%v",rootDb)
 
 	return dao.RunInTransaction(func(txDao *Dao) error {
 		// delete the related view or records table
@@ -151,8 +164,8 @@ func (dao *Dao) DeleteCollection(collection *models.Collection) error {
 		}
 
 		// trigger views resave to check for dependencies
-		if err := txDao.resaveViewsWithChangedSchema(collection.Id); err != nil {
-			return fmt.Errorf("The collection has a view dependency - %w", err)
+		if err := txDao.resaveViewsWithChangedSchema(rootDb,collection.Id); err != nil {
+			return fmt.Errorf("the collection has a view dependency - %w", err)
 		}
 
 		return txDao.Delete(collection)
@@ -162,8 +175,8 @@ func (dao *Dao) DeleteCollection(collection *models.Collection) error {
 // SaveCollection persists the provided Collection model and updates
 // its related records table schema.
 //
-// If collecction.IsNew() is true, the method will perform a create, otherwise an update.
-// To explicitly mark a collection for update you can use collecction.MarkAsNotNew().
+// If collection.IsNew() is true, the method will perform a create, otherwise an update.
+// To explicitly mark a collection for update you can use collection.MarkAsNotNew().
 func (dao *Dao) SaveCollection(collection *models.Collection) error {
 	var oldCollection *models.Collection
 
@@ -177,6 +190,11 @@ func (dao *Dao) SaveCollection(collection *models.Collection) error {
 		}
 	}
 
+	rootDb := dao.RootDB()
+	if rootDb == nil {
+		return errors.New("SaveCollection: rootDB is not available in the current DAO context")
+ 	}
+
 	txErr := dao.RunInTransaction(func(txDao *Dao) error {
 		// set default collection type
 		if collection.Type == "" {
@@ -185,7 +203,7 @@ func (dao *Dao) SaveCollection(collection *models.Collection) error {
 
 		switch collection.Type {
 		case models.CollectionTypeView:
-			if err := txDao.saveViewCollection(collection, oldCollection); err != nil {
+			if err := txDao.saveViewCollection(rootDb, collection, oldCollection); err != nil {
 				return err
 			}
 		default:
@@ -209,7 +227,7 @@ func (dao *Dao) SaveCollection(collection *models.Collection) error {
 
 	// trigger an update for all views with changed schema as a result of the current collection save
 	// (ignoring view errors to allow users to update the query from the UI)
-	dao.resaveViewsWithChangedSchema(collection.Id)
+	dao.resaveViewsWithChangedSchema(rootDb,collection.Id)
 
 	return nil
 }
@@ -227,7 +245,17 @@ func (dao *Dao) ImportCollections(
 	afterSync func(txDao *Dao, mappedImported, mappedExisting map[string]*models.Collection) error,
 ) error {
 	if len(importedCollections) == 0 {
-		return errors.New("No collections to import")
+		return errors.New("no collections to import")
+	}
+
+	rootDb := dao.RootDB()
+	if rootDb == nil {
+		// This would happen if the Dao instance itself wasn't properly initialized
+		// with a rootDB (e.g., if daos.New(tx) was called directly without
+		// the rootDB context being passed along).
+		// The main app Dao (app.Dao()) should always have rootDB.
+		// Daos created by app.Dao().RunInTransaction will also have it.
+		return errors.New("ImportCollections: rootDB is not available in the current DAO context")
 	}
 
 	return dao.RunInTransaction(func(txDao *Dao) error {
@@ -263,11 +291,11 @@ func (dao *Dao) ImportCollections(
 
 				// extend existing schema
 				if !deleteMissing {
-					schema, _ := existing.Schema.Clone()
+					schemaClone, _ := existing.Schema.Clone()
 					for _, f := range imported.Schema.Fields() {
-						schema.AddField(f) // add or replace
+						schemaClone.AddField(f) // add or replace
 					}
-					imported.Schema = *schema
+					imported.Schema = *schemaClone
 				}
 			} else {
 				imported.MarkAsNew()
@@ -285,7 +313,7 @@ func (dao *Dao) ImportCollections(
 				}
 
 				if existing.System {
-					return fmt.Errorf("System collection %q cannot be deleted.", existing.Name)
+					return fmt.Errorf("system collection %q cannot be deleted", existing.Name)
 				}
 
 				// delete the related records table or view
@@ -334,7 +362,7 @@ func (dao *Dao) ImportCollections(
 
 			existing := mappedExisting[imported.GetId()]
 
-			if err := txDao.saveViewCollection(imported, existing); err != nil {
+			if err := txDao.saveViewCollection(rootDb, imported, existing); err != nil {
 				return err
 			}
 		}
@@ -357,7 +385,7 @@ func (dao *Dao) ImportCollections(
 //   - saves the newCollection
 //
 // This method returns an error if newCollection is not a "view".
-func (dao *Dao) saveViewCollection(newCollection, oldCollection *models.Collection) error {
+func (dao *Dao) saveViewCollection(rootDb *dbx.DB, newCollection, oldCollection *models.Collection) error {
 	if !newCollection.IsView() {
 		return errors.New("not a view collection")
 	}
@@ -379,7 +407,7 @@ func (dao *Dao) saveViewCollection(newCollection, oldCollection *models.Collecti
 		}
 
 		// wrap view query if necessary
-		query, err = txDao.normalizeViewQueryId(query)
+		query, err = txDao.normalizeViewQueryId(rootDb, query)
 		if err != nil {
 			return fmt.Errorf("failed to normalize view query id: %w", err)
 		}
@@ -401,10 +429,10 @@ func (dao *Dao) saveViewCollection(newCollection, oldCollection *models.Collecti
 // with a subselect to ensure that the id column is a text since
 // currently we don't support non-string model ids
 // (see https://github.com/pocketbase/pocketbase/issues/3110).
-func (dao *Dao) normalizeViewQueryId(query string) (string, error) {
+func (dao *Dao) normalizeViewQueryId(rootDb *dbx.DB, query string) (string, error) {
 	query = strings.Trim(strings.TrimSpace(query), ";")
 
-	parsed, err := dao.parseQueryToFields(query)
+	parsed, err := dao.parseQueryToFields(rootDb, query)
 	if err != nil {
 		return "", err
 	}
@@ -444,7 +472,7 @@ func (dao *Dao) normalizeViewQueryId(query string) (string, error) {
 }
 
 // resaveViewsWithChangedSchema updates all view collections with changed schemas.
-func (dao *Dao) resaveViewsWithChangedSchema(excludeIds ...string) error {
+func (dao *Dao) resaveViewsWithChangedSchema(rootDb *dbx.DB, excludeIds ...string) error {
 	collections, err := dao.FindCollectionsByType(models.CollectionTypeView)
 	if err != nil {
 		return err
@@ -490,7 +518,7 @@ func (dao *Dao) resaveViewsWithChangedSchema(excludeIds ...string) error {
 				continue // no changes
 			}
 
-			if err := txDao.saveViewCollection(collection, nil); err != nil {
+			if err := txDao.saveViewCollection(rootDb, collection, nil); err != nil {
 				return err
 			}
 		}

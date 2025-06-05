@@ -39,6 +39,7 @@ func (dao *Dao) SyncRecordTableSchema(newCollection *models.Collection, oldColle
 				cols[schema.FieldNamePasswordHash] = "TEXT NOT NULL"
 				cols[schema.FieldNameLastResetSentAt] = "TEXT DEFAULT '' NOT NULL"
 				cols[schema.FieldNameLastVerificationSentAt] = "TEXT DEFAULT '' NOT NULL"
+				cols[schema.FieldNameLastLoginAlertSentAt] = "TEXT DEFAULT '' NOT NULL"
 			}
 
 			// ensure that the new collection has an id
@@ -212,15 +213,15 @@ func (dao *Dao) normalizeSingleVsMultipleFieldChanges(newCollection, oldCollecti
 			if !isOldMultiple && isNewMultiple {
 				// single -> multiple (convert to array)
 				copyQuery = txDao.DB().NewQuery(fmt.Sprintf(
-					`UPDATE {{%s}} set [[%s]] = (
+					`UPDATE "%s" set "%s" = (
 							CASE
-								WHEN COALESCE([[%s]], '') = ''
+								WHEN coalesce("%s"::text, '[]') = ''
 								THEN '[]'
 								ELSE (
 									CASE
-										WHEN json_valid([[%s]]) AND json_type([[%s]]) == 'array'
-										THEN [[%s]]
-										ELSE json_array([[%s]])
+										WHEN json_valid("%s"::text) AND json_typeof("%s"::json) = 'array'
+										THEN "%s"::json
+										ELSE json_build_array("%s")
 									END
 								)
 							END
@@ -239,15 +240,15 @@ func (dao *Dao) normalizeSingleVsMultipleFieldChanges(newCollection, oldCollecti
 				// note: for file fields the actual file objects are not
 				// deleted allowing additional custom handling via migration
 				copyQuery = txDao.DB().NewQuery(fmt.Sprintf(
-					`UPDATE {{%s}} set [[%s]] = (
+					`UPDATE "%s" set "%s" = (
 						CASE
-							WHEN COALESCE([[%s]], '[]') = '[]'
+							WHEN COALESCE("%s"::text, '[]') = '[]'
 							THEN ''
 							ELSE (
 								CASE
-									WHEN json_valid([[%s]]) AND json_type([[%s]]) == 'array'
-									THEN COALESCE(json_extract([[%s]], '$[#-1]'), '')
-									ELSE [[%s]]
+									WHEN json_valid("%s"::text) AND json_typeof("%s"::json) = 'array'
+									THEN COALESCE("%s"->>-1,'')::text
+                    				ELSE "%s"::text
 								END
 							)
 						END

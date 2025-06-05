@@ -39,6 +39,7 @@ func (dao *Dao) LogsStats(expr dbx.Expression) ([]*LogsStatsItem, error) {
 	result := []*LogsStatsItem{}
 
 	query := dao.LogQuery().
+		// !CHANGED: to support postgress standard date
 		Select("count(id) as total", "created as date").
 		GroupBy("date")
 

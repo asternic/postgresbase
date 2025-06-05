@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/AlperRehaYAZGAN/postgresbase/core"
 	"github.com/AlperRehaYAZGAN/postgresbase/daos"
@@ -17,9 +18,13 @@ import (
 	"github.com/AlperRehaYAZGAN/postgresbase/tools/search"
 	"github.com/AlperRehaYAZGAN/postgresbase/tools/types"
 	validation "github.com/go-ozzo/ozzo-validation/v4"
+	"github.com/pocketbase/dbx"
 )
 
 var collectionNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_]*$`)
+// schemaFieldNameRegex is already defined in models/schema/schema_field.go,
+// but forms might not directly import that. If it's used here, it should be defined or imported.
+// For now, assuming it's not strictly needed for this fix if schema.Schema.Validate handles it.
 
 // CollectionUpsert is a [models.Collection] upsert (create/update) form.
 type CollectionUpsert struct {
@@ -50,7 +55,7 @@ type CollectionUpsert struct {
 func NewCollectionUpsert(app core.App, collection *models.Collection) *CollectionUpsert {
 	form := &CollectionUpsert{
 		app:        app,
-		dao:        app.Dao(),
+		dao:        app.Dao(), // Dao will have its rootDB correctly set by the app
 		collection: collection,
 	}
 
@@ -86,23 +91,54 @@ func (form *CollectionUpsert) SetDao(dao *daos.Dao) {
 	form.dao = dao
 }
 
-// Validate makes the form validatable by implementing [validation.Validatable] interface.
 func (form *CollectionUpsert) Validate() error {
 	isAuth := form.Type == models.CollectionTypeAuth
 	isView := form.Type == models.CollectionTypeView
 
-	// generate schema from the query (overwriting any explicit user defined schema)
 	if isView {
 		options := models.CollectionViewOptions{}
 		if err := decodeOptions(form.Options, &options); err != nil {
-			return err
+			if _, ok := err.(validation.Errors); ok {
+				return validation.Errors{"options": err}
+			}
+			return validation.Errors{"options": validation.NewError("validation_invalid_options", "Invalid view options: "+err.Error())}
 		}
-		form.Schema, _ = form.dao.CreateViewSchema(options.Query)
+
+		rootDbInstance := form.dao.RootDB()
+		if rootDbInstance == nil {
+			// This can happen if the form.dao was initialized without a rootDB,
+			// e.g. daos.New(tx) without propagating the app's rootDB.
+			// The form should ideally always have a dao with a valid rootDB.
+			return validation.NewError("internal_error", "Root DB instance not available in DAO for view schema creation")
+		}
+
+		generatedSchema, err := form.dao.CreateViewSchema(options.Query) // Uses dao.RootDB() internally
+		if err != nil {
+			return validation.Errors{
+				"options": validation.Errors{
+					"query": validation.NewError("validation_view_schema_generation_failed", "Failed to generate schema from view query: "+err.Error()),
+				},
+			}
+		}
+		form.Schema = generatedSchema
+	}
+
+	schemaRules := []validation.Rule{
+		validation.By(func(value any) error {
+			s, _ := value.(schema.Schema)
+			return s.Validate(form.Type)
+		}),
+		validation.By(form.checkMinSchemaFields),
+		validation.By(form.ensureNoSystemFieldsChange),
+		validation.By(form.ensureNoFieldsTypeChange),
+		validation.By(form.checkRelationFields),
+	}
+	if isAuth {
+		schemaRules = append(schemaRules, validation.By(form.ensureNoAuthFieldName))
 	}
 
 	return validation.ValidateStruct(form,
-		validation.Field(
-			&form.Id,
+		validation.Field(&form.Id,
 			validation.When(
 				form.collection.IsNew(),
 				validation.Length(models.SnowflakeMinLen, models.SnowflakeMaxLen),
@@ -110,12 +146,8 @@ func (form *CollectionUpsert) Validate() error {
 				validation.By(validators.UniqueId(form.dao, form.collection.TableName())),
 			).Else(validation.In(form.collection.Id)),
 		),
-		validation.Field(
-			&form.System,
-			validation.By(form.ensureNoSystemFlagChange),
-		),
-		validation.Field(
-			&form.Type,
+		validation.Field(&form.System, validation.By(form.ensureNoSystemFlagChange)),
+		validation.Field(&form.Type,
 			validation.Required,
 			validation.In(
 				models.CollectionTypeBase,
@@ -124,38 +156,27 @@ func (form *CollectionUpsert) Validate() error {
 			),
 			validation.By(form.ensureNoTypeChange),
 		),
-		validation.Field(
-			&form.Name,
+		validation.Field(&form.Name,
 			validation.Required,
 			validation.Length(1, 255),
 			validation.Match(collectionNameRegex),
 			validation.By(form.ensureNoSystemNameChange),
 			validation.By(form.checkUniqueName),
+			validation.By(form.checkForVia),
 		),
-		// validates using the type's own validation rules + some collection's specifics
-		validation.Field(
-			&form.Schema,
-			validation.By(form.checkMinSchemaFields),
-			validation.By(form.ensureNoSystemFieldsChange),
-			validation.By(form.ensureNoFieldsTypeChange),
-			validation.By(form.checkRelationFields),
-			validation.When(isAuth, validation.By(form.ensureNoAuthFieldName)),
-		),
+		validation.Field(&form.Schema, schemaRules...),
 		validation.Field(&form.ListRule, validation.By(form.checkRule)),
 		validation.Field(&form.ViewRule, validation.By(form.checkRule)),
-		validation.Field(
-			&form.CreateRule,
-			validation.When(isView, validation.Nil),
+		validation.Field(&form.CreateRule,
+			validation.When(isView, validation.Empty.Error("View collections cannot have a create rule.")),
 			validation.By(form.checkRule),
 		),
-		validation.Field(
-			&form.UpdateRule,
-			validation.When(isView, validation.Nil),
+		validation.Field(&form.UpdateRule,
+			validation.When(isView, validation.Empty.Error("View collections cannot have an update rule.")),
 			validation.By(form.checkRule),
 		),
-		validation.Field(
-			&form.DeleteRule,
-			validation.When(isView, validation.Nil),
+		validation.Field(&form.DeleteRule,
+			validation.When(isView, validation.Empty.Error("View collections cannot have a delete rule.")),
 			validation.By(form.checkRule),
 		),
 		validation.Field(&form.Indexes, validation.By(form.checkIndexes)),
@@ -163,15 +184,26 @@ func (form *CollectionUpsert) Validate() error {
 	)
 }
 
+func (form *CollectionUpsert) checkForVia(value any) error {
+	v, _ := value.(string)
+	if v == "" {
+		return nil
+	}
+
+	if strings.Contains(strings.ToLower(v), "_via_") {
+		return validation.NewError("validation_invalid_name", "The name of the collection cannot contain '_via_'.")
+	}
+
+	return nil
+}
+
 func (form *CollectionUpsert) checkUniqueName(value any) error {
 	v, _ := value.(string)
 
-	// ensure unique collection name
 	if !form.dao.IsCollectionNameUnique(v, form.collection.Id) {
 		return validation.NewError("validation_collection_name_exists", "Collection name must be unique (case insensitive).")
 	}
 
-	// ensure that the collection name doesn't collide with the id of any collection
 	if form.dao.FindById(&models.Collection{}, v) == nil {
 		return validation.NewError("validation_collection_name_id_duplicate", "The name must not match an existing collection id.")
 	}
@@ -244,7 +276,6 @@ func (form *CollectionUpsert) checkRelationFields(value any) error {
 			}
 		}
 
-		// prevent collectionId change
 		oldField := form.collection.Schema.GetFieldById(field.Id)
 		if oldField != nil {
 			oldOptions, _ := oldField.Options.(*schema.RelationOptions)
@@ -262,7 +293,6 @@ func (form *CollectionUpsert) checkRelationFields(value any) error {
 
 		relCollection, _ := form.dao.FindCollectionByNameOrId(options.CollectionId)
 
-		// validate collectionId
 		if relCollection == nil || relCollection.Id != options.CollectionId {
 			return validation.Errors{fmt.Sprint(i): validation.Errors{
 				"options": validation.Errors{
@@ -274,8 +304,6 @@ func (form *CollectionUpsert) checkRelationFields(value any) error {
 			}
 		}
 
-		// allow only views to have relations to other views
-		// (see https://github.com/pocketbase/pocketbase/issues/3000)
 		if form.Type != models.CollectionTypeView && relCollection.IsView() {
 			return validation.Errors{fmt.Sprint(i): validation.Errors{
 				"options": validation.Errors{
@@ -299,7 +327,6 @@ func (form *CollectionUpsert) ensureNoAuthFieldName(value any) error {
 	}
 
 	authFieldNames := schema.AuthFieldNames()
-	// exclude the meta RecordUpsert form fields
 	authFieldNames = append(authFieldNames, "password", "passwordConfirm", "oldPassword")
 
 	errs := validation.Errors{}
@@ -366,7 +393,20 @@ func (form *CollectionUpsert) checkRule(value any) error {
 	dummy.System = form.System
 	dummy.Options = form.Options
 
-	r := resolvers.NewRecordFieldResolver(form.dao, &dummy, nil, true)
+	rootDB := form.dao.RootDB()
+	if rootDB == nil {
+		// This can happen if the form's dao was initialized without a rootDB.
+		// For rule validation, a resolver needs a *dbx.DB.
+		// If form.dao is transactional, we must use its root.
+		// If form.dao is the app dao, its rootDB is itself.
+		if appDao, ok := form.app.Dao().DB().(*dbx.DB); ok { // Attempt to get from app directly
+			rootDB = appDao
+		} else {
+			return validation.NewError("validation_rule_check_failed", "Cannot validate rule: Root DB instance not available.")
+		}
+	}
+
+	r := resolvers.NewRecordFieldResolver(form.dao, rootDB, &dummy, nil, true)
 
 	_, err := search.FilterData(*v).BuildExpr(r)
 	if err != nil {
@@ -397,18 +437,6 @@ func (form *CollectionUpsert) checkIndexes(value any) error {
 				),
 			}
 		}
-
-		// note: we don't check the index table because it is always
-		// overwritten by the daos.SyncRecordTableSchema to allow
-		// easier partial modifications (eg. changing only the collection name).
-		// if !strings.EqualFold(parsed.TableName, form.Name) {
-		// 	return validation.Errors{
-		// 		strconv.Itoa(i): validation.NewError(
-		// 			"validation_invalid_index_table",
-		// 			fmt.Sprintf("The index table must be the same as the collection name."),
-		// 		),
-		// 	}
-		// }
 	}
 
 	return nil
@@ -424,12 +452,10 @@ func (form *CollectionUpsert) checkOptions(value any) error {
 			return err
 		}
 
-		// check the generic validations
 		if err := options.Validate(); err != nil {
 			return err
 		}
 
-		// additional form specific validations
 		if err := form.checkRule(options.ManageRule); err != nil {
 			return validation.Errors{"manageRule": err}
 		}
@@ -439,13 +465,19 @@ func (form *CollectionUpsert) checkOptions(value any) error {
 			return err
 		}
 
-		// check the generic validations
 		if err := options.Validate(); err != nil {
 			return err
 		}
 
-		// check the query option
-		if _, err := form.dao.CreateViewSchema(options.Query); err != nil {
+		rootDB := form.dao.RootDB()
+		if rootDB == nil {
+			if appDao, ok := form.app.Dao().DB().(*dbx.DB); ok {
+				rootDB = appDao
+			} else {
+				return validation.NewError("validation_options_check_failed", "Cannot check view options: Root DB instance not available.")
+			}
+		}
+		if _, err := form.dao.CreateViewSchema(options.Query); err != nil { // CreateViewSchema uses dao.RootDB()
 			return validation.Errors{
 				"query": validation.NewError(
 					"validation_invalid_view_query",
@@ -483,29 +515,20 @@ func (form *CollectionUpsert) Submit(interceptors ...InterceptorFunc[*models.Col
 	}
 
 	if form.collection.IsNew() {
-		// type can be set only on create
 		form.collection.Type = form.Type
-
-		// system flag can be set only on create
 		form.collection.System = form.System
-
-		// custom insertion id can be set only on create
 		if form.Id != "" {
 			form.collection.MarkAsNew()
 			form.collection.SetId(form.Id)
 		}
 	}
 
-	// system collections cannot be renamed
 	if form.collection.IsNew() || !form.collection.System {
 		form.collection.Name = form.Name
 	}
 
-	// view schema is autogenerated on save and cannot have indexes
 	if !form.collection.IsView() {
 		form.collection.Schema = form.Schema
-
-		// normalize indexes format
 		form.collection.Indexes = make(types.JsonArray[string], len(form.Indexes))
 		for i, rawIdx := range form.Indexes {
 			form.collection.Indexes[i] = dbutils.ParseIndex(rawIdx).Build()

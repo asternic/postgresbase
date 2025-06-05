@@ -9,6 +9,7 @@ import (
 const (
 	// DefaultIdLength is the default length of the generated model id.
 	DefaultIdLength = 15
+	// !CHANGED: add Snowflak Min Max values
 	SnowflakeMinLen = 8
 	SnowflakeMaxLen = 32
 
@@ -102,6 +103,7 @@ func (m *BaseModel) GetUpdated() types.DateTime {
 //
 // The generated id is a cryptographically random 15 characters length string.
 func (m *BaseModel) RefreshId() {
+	// !CHANGED: use the SnowflakId
 	m.Id = security.RandomSnowflakeId()
 }
 

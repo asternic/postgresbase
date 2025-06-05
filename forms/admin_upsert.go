@@ -55,6 +55,7 @@ func (form *AdminUpsert) Validate() error {
 			&form.Id,
 			validation.When(
 				form.admin.IsNew(),
+				// !CHANGED: replace default id validations to Snowflak
 				validation.Length(models.SnowflakeMinLen, models.SnowflakeMaxLen),
 				validation.Match(idRegex),
 				validation.By(validators.UniqueId(form.dao, form.admin.TableName())),
