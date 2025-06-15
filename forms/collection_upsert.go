@@ -381,6 +381,7 @@ func (form *CollectionUpsert) ensureNoSystemFieldsChange(value any) error {
 	return nil
 }
 
+/*
 func (form *CollectionUpsert) checkRule(value any) error {
 	v, _ := value.(*string)
 	if v == nil || *v == "" {
@@ -393,20 +394,26 @@ func (form *CollectionUpsert) checkRule(value any) error {
 	dummy.System = form.System
 	dummy.Options = form.Options
 
-	rootDB := form.dao.RootDB()
-	if rootDB == nil {
-		// This can happen if the form's dao was initialized without a rootDB.
-		// For rule validation, a resolver needs a *dbx.DB.
-		// If form.dao is transactional, we must use its root.
-		// If form.dao is the app dao, its rootDB is itself.
-		if appDao, ok := form.app.Dao().DB().(*dbx.DB); ok { // Attempt to get from app directly
-			rootDB = appDao
-		} else {
-			return validation.NewError("validation_rule_check_failed", "Cannot validate rule: Root DB instance not available.")
-		}
-	}
+    // Get the DB instance - can be either *dbx.DB or *dbx.Tx
+    db := form.dao.DB()
+    
+    // If we're in a transaction, get the underlying DB
+    if tx, ok := db.(*dbx.Tx); ok {
+        db = tx.DB()
+    }
+    // else it's already a *dbx.DB
 
-	r := resolvers.NewRecordFieldResolver(form.dao, rootDB, &dummy, nil, true)
+	// Last resort fallback (shouldn't be needed with the new interface)
+    if db == nil {
+        if appDB, ok := form.app.Dao().DB().(*dbx.DB); ok {
+            db = appDB
+        } else {
+            return validation.NewError("validation_rule_check_failed",
+                "Cannot validate rule: DB instance not available.")
+        }
+    }
+
+	r := resolvers.NewRecordFieldResolver(form.dao, db, &dummy, nil, true)
 
 	_, err := search.FilterData(*v).BuildExpr(r)
 	if err != nil {
@@ -414,6 +421,58 @@ func (form *CollectionUpsert) checkRule(value any) error {
 	}
 
 	return nil
+}
+*/
+
+func (form *CollectionUpsert) checkRule(value any) error {
+    v, _ := value.(*string)
+    if v == nil || *v == "" {
+        return nil // nothing to check
+    }
+
+    dummy := *form.collection
+    dummy.Type = form.Type
+    dummy.Schema = form.Schema
+    dummy.System = form.System
+    dummy.Options = form.Options
+
+    // Get the DB builder instance
+    db := form.dao.DB()
+
+    // For transactions, we need to get the original DB connection
+    // Since dbx.Tx doesn't expose DB() directly, we need to:
+    // 1. Get the root DB if available
+    // 2. Fallback to app's DB if needed
+    var dbConn *dbx.DB
+    switch v := db.(type) {
+    case *dbx.DB:
+        dbConn = v
+    case *dbx.Tx:
+        // Try to get root DB from dao
+        if rootDB := form.dao.RootDB(); rootDB != nil {
+            dbConn = rootDB
+        } else {
+            // Fallback to app's DB
+            if appDB, ok := form.app.Dao().DB().(*dbx.DB); ok {
+                dbConn = appDB
+            } else {
+                return validation.NewError("validation_rule_check_failed",
+                    "Cannot validate rule: DB instance not available.")
+            }
+        }
+    default:
+        return validation.NewError("validation_rule_check_failed",
+            "Unsupported database connection type")
+    }
+
+    r := resolvers.NewRecordFieldResolver(form.dao, dbConn, &dummy, nil, true)
+
+    _, err := search.FilterData(*v).BuildExpr(r)
+    if err != nil {
+        return validation.NewError("validation_invalid_rule", "Invalid filter rule. Raw error: "+err.Error())
+    }
+
+    return nil
 }
 
 func (form *CollectionUpsert) checkIndexes(value any) error {

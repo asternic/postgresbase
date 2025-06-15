@@ -288,7 +288,7 @@ func (dao *Dao) FindRecordsByFilter(
 	// ---
 	resolver := resolvers.NewRecordFieldResolver(
 		dao,
-		dao.DB().(*dbx.DB),
+		dao.DB(),
 		collection, // the base collection
 		nil,        // no request data
 		true,       // allow searching hidden/protected fields like "email"
@@ -565,7 +565,7 @@ func (dao *Dao) CanAccessRecord(record *models.Record, requestInfo *models.Reque
 		AndWhere(dbx.HashExp{record.Collection().Name + ".id": record.Id})
 
 	// parse and apply the access rule filter
-	resolver := resolvers.NewRecordFieldResolver(dao, dao.DB().(*dbx.DB), record.Collection(), requestInfo, true)
+	resolver := resolvers.NewRecordFieldResolver(dao, dao.DB(), record.Collection(), requestInfo, true)
 	expr, err := search.FilterData(*accessRule).BuildExpr(resolver)
 	if err != nil {
 		return false, err

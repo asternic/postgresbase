@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"reflect"
 
 	"github.com/AlperRehaYAZGAN/postgresbase/models"
 	"github.com/AlperRehaYAZGAN/postgresbase/models/schema"
 	"github.com/AlperRehaYAZGAN/postgresbase/tools/search"
 	"github.com/AlperRehaYAZGAN/postgresbase/tools/security"
-	"github.com/AlperRehaYAZGAN/postgresbase/tools/inflector"
 	"github.com/pocketbase/dbx"
 	"github.com/spf13/cast"
 )
@@ -71,11 +71,56 @@ type RecordFieldResolver struct {
 	loadedCollections []*models.Collection
 	joins             []*join
 	allowHiddenFields bool
-	db                *dbx.DB
+	db                dbx.Builder
+}
+
+// NewRecordFieldResolver creates and initializes a new RecordFieldResolver.
+// db can be either *dbx.DB or *dbx.Tx (implements dbx.Builder)
+func NewRecordFieldResolver(
+    dao CollectionsFinder,
+    db dbx.Builder,  // Changed from *dbx.DB to dbx.Builder
+    baseCollection *models.Collection,
+    requestInfo *models.RequestInfo,
+    allowHiddenFields bool,
+) *RecordFieldResolver {
+    r := &RecordFieldResolver{
+        dao:               dao,
+        db:                db,
+        baseCollection:    baseCollection,
+        requestInfo:       requestInfo,
+        allowHiddenFields: allowHiddenFields,
+        joins:             []*join{},
+        loadedCollections: []*models.Collection{baseCollection},
+        allowedFields: []string{
+            `^\w+[\w\.\:]*$`,
+            `^\@request\.method$`,
+            `^\@request\.auth\.[\w\.\:]*\w+$`,
+            `^\@request\.data\.[\w\.\:]*\w+$`,
+            `^\@request\.query\.[\w\.\:]*\w+$`,
+            `^\@request\.headers\.\w+$`,
+            `^\@collection\.\w+(\:\w+)?\.[\w\.\:]*\w+$`,
+        },
+    }
+
+    r.staticRequestInfo = map[string]any{}
+    if r.requestInfo != nil {
+        r.staticRequestInfo["method"] = r.requestInfo.Method
+        r.staticRequestInfo["query"] = r.requestInfo.Query
+        r.staticRequestInfo["headers"] = r.requestInfo.Headers
+        r.staticRequestInfo["data"] = r.requestInfo.Data
+        r.staticRequestInfo["auth"] = nil
+        if r.requestInfo.AuthRecord != nil {
+            r.requestInfo.AuthRecord.IgnoreEmailVisibility(true)
+            r.staticRequestInfo["auth"] = r.requestInfo.AuthRecord.PublicExport()
+            r.requestInfo.AuthRecord.IgnoreEmailVisibility(false)
+        }
+    }
+
+    return r
 }
 
 // NewRecordFieldResolver creates and initializes a new `RecordFieldResolver`.
-func NewRecordFieldResolver(
+func otherNewRecordFieldResolver(
 	dao CollectionsFinder,
 	db *dbx.DB, // Add db parameter
 	baseCollection *models.Collection,
@@ -183,8 +228,93 @@ func (r *RecordFieldResolver) OriginalUpdateQuery(query *dbx.SelectQuery) error 
 	return nil
 }
 
+// Helper method to get driver name safely
+func (r *RecordFieldResolver) getDriverName() string {
+    // First try to get from *dbx.DB
+    if db, ok := r.db.(*dbx.DB); ok {
+        return db.DriverName()
+    }
+    
+    // For transactions, we need to handle differently since *dbx.Tx doesn't expose DB
+    // We'll use a type assertion to access the internal db field (unexported in dbx)
+    // Note: This uses reflection as a last resort
+    val := reflect.ValueOf(r.db).Elem()
+    if val.Kind() == reflect.Struct {
+        dbField := val.FieldByName("db")
+        if dbField.IsValid() && !dbField.IsNil() {
+            if db, ok := dbField.Interface().(*dbx.DB); ok {
+                return db.DriverName()
+            }
+        }
+    }
+    
+    return ""
+}
 
 func (r *RecordFieldResolver) UpdateQuery(query *dbx.SelectQuery) error {
+    fmt.Println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    fmt.Println("!!! USING MY MODIFIED RecordFieldResolver.UpdateQuery V-Option2 !!!")
+    fmt.Println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+
+    if len(r.joins) == 0 {
+        fmt.Println("DEBUG: RecordFieldResolver - No joins, no DISTINCT needed by this logic.")
+        return nil
+    }
+
+    driverName := r.getDriverName()
+    isPostgres := driverName == "postgres"
+    fmt.Printf("DEBUG: RecordFieldResolver - isPostgres: %v\n", isPostgres)
+
+    applyDistinct := true // Apply DISTINCT by default
+
+    if isPostgres {
+        // Check if the base collection contains any JSON or File type fields
+        hasNonComparableColumn := false
+        if r.baseCollection != nil && r.baseCollection.Schema.Fields() != nil {
+            fmt.Printf("DEBUG: RecordFieldResolver - Base collection: %s, Schema fields count: %d\n",
+                r.baseCollection.Name, len(r.baseCollection.Schema.Fields()))
+            for _, field := range r.baseCollection.Schema.Fields() {
+                fmt.Printf("DEBUG: RecordFieldResolver - Checking field: %s, Type: %s\n",
+                    field.Name, field.Type)
+                if field.Type == schema.FieldTypeJson || field.Type == schema.FieldTypeFile {
+                    hasNonComparableColumn = true
+                    fmt.Printf("DEBUG: RecordFieldResolver - Found non-comparable column: %s\n", field.Name)
+                    break
+                }
+            }
+        }
+
+        if hasNonComparableColumn {
+            queryInfo := query.Info()
+            if len(queryInfo.Selects) == 1 && strings.HasSuffix(queryInfo.Selects[0], ".*") {
+                fmt.Println("DEBUG: PostgreSQL with JSON/File columns and SELECT *, skipping DISTINCT.")
+                applyDistinct = false
+            } else {
+                fmt.Println("DEBUG: PostgreSQL with JSON/File columns, but SELECT is not a simple *")
+            }
+        }
+    }
+
+    if applyDistinct {
+        query.Distinct(true)
+        fmt.Println("DEBUG: Applied DISTINCT.")
+    } else {
+        fmt.Println("DEBUG: Skipped DISTINCT.")
+    }
+
+    // Apply joins
+    for _, join := range r.joins {
+        query.LeftJoin(
+            (join.tableName + " " + join.tableAlias),
+            join.on,
+        )
+    }
+
+    return nil
+}
+
+/*
+func (r *RecordFieldResolver) anda_anda_UpdateQuery(query *dbx.SelectQuery) error {
 	// Your initial print statements for debugging
 	fmt.Println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 	fmt.Println("!!! USING MY MODIFIED RecordFieldResolver.UpdateQuery V-Option2 !!!")
@@ -263,149 +393,8 @@ func (r *RecordFieldResolver) UpdateQuery(query *dbx.SelectQuery) error {
 
 	return nil
 }
+*/
 
-func (r *RecordFieldResolver) works_but_loose_attach_UpdateQuery(query *dbx.SelectQuery) error {
-
-	if len(r.joins) == 0 {
-		fmt.Println("DEBUG: RecordFieldResolver - No joins, skipping DISTINCT logic modification.")
-		return nil
-	}
-
-	isPostgres := false
-	if r.db != nil {
-		isPostgres = (r.db.DriverName() == "postgres")
-		fmt.Printf("DEBUG: RecordFieldResolver - isPostgres: %v\n", isPostgres)
-	} else {
-		fmt.Println("DEBUG: RecordFieldResolver - r.db is nil!")
-	}
-
-	queryInfo := query.Info()
-	fmt.Printf("DEBUG: RecordFieldResolver - Original SELECT clause: %v\n", queryInfo.Selects)
-
-	// --- Your existing logic to potentially modify query.Selects(...) ---
-	if isPostgres && len(queryInfo.Selects) == 1 && strings.HasSuffix(queryInfo.Selects[0], ".*") {
-		fmt.Println("DEBUG: RecordFieldResolver - Condition met to potentially replace SELECT *")
-		hasJsonColumn := false
-		var fieldsToSelect []string
-		tableName := r.baseCollection.Name
-		dbInstance := r.db
-
-		if dbInstance == nil {
-			fmt.Println("DEBUG: RecordFieldResolver - dbInstance is nil inside SELECT * replacement logic!")
-		} else {
-			fmt.Printf("DEBUG: RecordFieldResolver - Base collection: %s, Schema fields count: %d\n", tableName, len(r.baseCollection.Schema.Fields()))
-		}
-
-		for _, field := range r.baseCollection.Schema.Fields() {
-			fmt.Printf("DEBUG: RecordFieldResolver - Checking field: %s, Type: %s\n", field.Name, field.Type)
-			if field.Type == schema.FieldTypeJson || field.Type == schema.FieldTypeFile {
-				hasJsonColumn = true
-				fmt.Printf("DEBUG: RecordFieldResolver - Found JSON column: %s\n", field.Name)
-			} else {
-				if dbInstance != nil {
-					fieldsToSelect = append(fieldsToSelect, fmt.Sprintf("%s.%s", dbInstance.QuoteTableName(tableName), dbInstance.QuoteSimpleColumnName(inflector.Columnify(field.Name))))
-				} else {
-					fieldsToSelect = append(fieldsToSelect, fmt.Sprintf("\"%s\".\"%s\"", tableName, inflector.Columnify(field.Name)))
-				}
-			}
-		}
-		fmt.Printf("DEBUG: RecordFieldResolver - hasJsonColumn: %v, fieldsToSelect after schema iteration: %v\n", hasJsonColumn, fieldsToSelect)
-
-		if hasJsonColumn {
-			// Add base model fields
-			for _, baseFieldName := range schema.BaseModelFieldNames() {
-				alreadyAdded := false
-				quotedBaseFieldName := ""
-				if dbInstance != nil {
-					quotedBaseFieldName = dbInstance.QuoteSimpleColumnName(inflector.Columnify(baseFieldName))
-				} else {
-					quotedBaseFieldName = fmt.Sprintf("\"%s\"", inflector.Columnify(baseFieldName))
-				}
-				for _, selectedCol := range fieldsToSelect {
-					if strings.HasSuffix(selectedCol, quotedBaseFieldName) {
-						alreadyAdded = true
-						break
-					}
-				}
-				if !alreadyAdded {
-					if dbInstance != nil {
-						fieldsToSelect = append(fieldsToSelect, fmt.Sprintf("%s.%s", dbInstance.QuoteTableName(tableName), quotedBaseFieldName))
-					} else {
-						fieldsToSelect = append(fieldsToSelect, fmt.Sprintf("\"%s\".%s", tableName, quotedBaseFieldName))
-					}
-				}
-			}
-			// Add auth specific fields
-			if r.baseCollection.IsAuth() {
-				for _, authFieldName := range schema.AuthFieldNames() {
-					alreadyAdded := false
-					quotedAuthFieldName := ""
-					if dbInstance != nil {
-						quotedAuthFieldName = dbInstance.QuoteSimpleColumnName(inflector.Columnify(authFieldName))
-					} else {
-						quotedAuthFieldName = fmt.Sprintf("\"%s\"", inflector.Columnify(authFieldName))
-					}
-
-					for _, selectedCol := range fieldsToSelect {
-						if strings.HasSuffix(selectedCol, quotedAuthFieldName) {
-							alreadyAdded = true
-							break
-						}
-					}
-					if !alreadyAdded {
-						if dbInstance != nil {
-							fieldsToSelect = append(fieldsToSelect, fmt.Sprintf("%s.%s", dbInstance.QuoteTableName(tableName), quotedAuthFieldName))
-						} else {
-							fieldsToSelect = append(fieldsToSelect, fmt.Sprintf("\"%s\".%s", tableName, quotedAuthFieldName))
-						}
-					}
-				}
-			}
-
-			if len(fieldsToSelect) > 0 {
-				fmt.Printf("DEBUG: RecordFieldResolver - Replacing SELECT * with explicit columns: %v\n", fieldsToSelect)
-				query.Select(fieldsToSelect...)
-			} else {
-				fmt.Println("DEBUG: RecordFieldResolver - All fields are JSON or no comparable fields, falling back to SELECT id.")
-				if dbInstance != nil {
-					query.Select(fmt.Sprintf("%s.id", dbInstance.QuoteTableName(tableName)))
-				} else {
-					query.Select(fmt.Sprintf("\"%s\".id", tableName))
-				}
-			}
-		} else {
-			fmt.Println("DEBUG: RecordFieldResolver - No JSON columns found, SELECT * will not be replaced for DISTINCT.")
-		}
-	} else {
-		// ... (your existing else conditions for logging why SELECT * wasn't replaced)
-		if !isPostgres {
-			fmt.Println("DEBUG: RecordFieldResolver - Not a PostgreSQL instance.")
-		}
-		if len(queryInfo.Selects) != 1 || !strings.HasSuffix(queryInfo.Selects[0], ".*") {
-			fmt.Printf("DEBUG: RecordFieldResolver - SELECT clause is not a simple SELECT * (len: %d, clause: %v).\n", len(queryInfo.Selects), queryInfo.Selects)
-		}
-	}
-	// --- End of your existing logic to potentially modify query.Selects(...) ---
-
-	// Build the query to get SQL and Params for debugging
-	builtQuery := query.Build()
-	fmt.Printf("DEBUG: RecordFieldResolver - SQL before DISTINCT: %s \nPARAMS: %v\n", builtQuery.SQL(), builtQuery.Params())
-
-	query.Distinct(true)
-
-	// Build again to see the effect of DISTINCT
-	builtQueryAfterDistinct := query.Build()
-	fmt.Printf("DEBUG: RecordFieldResolver - SQL after DISTINCT: %s \nPARAMS: %v\n", builtQueryAfterDistinct.SQL(), builtQueryAfterDistinct.Params())
-
-	for _, join := range r.joins {
-		query.LeftJoin(
-			(join.tableName + " " + join.tableAlias),
-			join.on,
-		)
-	}
-
-	return nil
-}
 
 // Resolve implements `search.FieldResolver` interface.
 //

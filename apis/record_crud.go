@@ -56,7 +56,7 @@ func (api *recordApi) list(c echo.Context) error {
 
 	fieldsResolver := resolvers.NewRecordFieldResolver(
 		api.app.Dao(),
-		api.app.Dao().DB().(*dbx.DB),
+		api.app.Dao().DB(),
 		collection,
 		requestInfo,
 		// hidden fields are searchable only by admins
@@ -116,7 +116,7 @@ func (api *recordApi) view(c echo.Context) error {
 
 	ruleFunc := func(q *dbx.SelectQuery) error {
 		if requestInfo.Admin == nil && collection.ViewRule != nil && *collection.ViewRule != "" {
-			resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB().(*dbx.DB), collection, requestInfo, true)
+			resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB(), collection, requestInfo, true)
 			expr, err := search.FilterData(*collection.ViewRule).BuildExpr(resolver)
 			if err != nil {
 				return err
@@ -196,7 +196,7 @@ func (api *recordApi) create(c echo.Context) error {
 				return nil // no create rule to resolve
 			}
 
-			resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB().(*dbx.DB), collection, requestInfo, true)
+			resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB(), collection, requestInfo, true)
 			expr, err := search.FilterData(*collection.CreateRule).BuildExpr(resolver)
 			if err != nil {
 				return err
@@ -296,7 +296,7 @@ func (api *recordApi) update(c echo.Context) error {
 
 	ruleFunc := func(q *dbx.SelectQuery) error {
 		if requestInfo.Admin == nil && collection.UpdateRule != nil && *collection.UpdateRule != "" {
-			resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB().(*dbx.DB), collection, requestInfo, true)
+			resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB(), collection, requestInfo, true)
 			expr, err := search.FilterData(*collection.UpdateRule).BuildExpr(resolver)
 			if err != nil {
 				return err
@@ -378,7 +378,7 @@ func (api *recordApi) delete(c echo.Context) error {
 
 	ruleFunc := func(q *dbx.SelectQuery) error {
 		if requestInfo.Admin == nil && collection.DeleteRule != nil && *collection.DeleteRule != "" {
-			resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB().(*dbx.DB), collection, requestInfo, true)
+			resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB(), collection, requestInfo, true)
 			expr, err := search.FilterData(*collection.DeleteRule).BuildExpr(resolver)
 			if err != nil {
 				return err

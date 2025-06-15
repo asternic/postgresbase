@@ -227,7 +227,7 @@ func (api *recordAuthApi) authWithOAuth2(c echo.Context) error {
 				}
 
 				if *collection.CreateRule != "" {
-					resolver := resolvers.NewRecordFieldResolver(txDao, txDao.DB().(*dbx.DB), collection, &requestInfo, true)
+					resolver := resolvers.NewRecordFieldResolver(txDao, txDao.DB(), collection, &requestInfo, true)
 					expr, err := search.FilterData(*collection.CreateRule).BuildExpr(resolver)
 					if err != nil {
 						return err

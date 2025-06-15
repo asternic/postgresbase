@@ -574,7 +574,7 @@ func (api *realtimeApi) canAccessRecord(
 	}
 
 	ruleFunc := func(q *dbx.SelectQuery) error {
-		resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB().(*dbx.DB), record.Collection(), requestInfo, false)
+		resolver := resolvers.NewRecordFieldResolver(api.app.Dao(), api.app.Dao().DB(), record.Collection(), requestInfo, false)
 
 		expr, err := search.FilterData(filter).BuildExpr(resolver)
 		if err != nil {
