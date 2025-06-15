@@ -278,10 +278,48 @@ func autoIgnoreAuthRecordsEmailVisibility(
 	return nil
 }
 
+func hasAuthManageAccess(
+    dao *daos.Dao,
+    record *models.Record,
+    requestInfo *models.RequestInfo,
+) bool {
+    if !record.Collection().IsAuth() {
+        return false
+    }
+
+    manageRule := record.Collection().AuthOptions().ManageRule
+
+    if manageRule == nil || *manageRule == "" {
+        return false // only for admins (manageRule can't be empty)
+    }
+
+    if requestInfo == nil || requestInfo.AuthRecord == nil {
+        return false // no auth record
+    }
+
+    ruleFunc := func(q *dbx.SelectQuery) error {
+        // Get the underlying DB instance (works for both DB and Tx)
+        db := dao.DB()
+
+        resolver := resolvers.NewRecordFieldResolver(dao, db, record.Collection(), requestInfo, true)
+        expr, err := search.FilterData(*manageRule).BuildExpr(resolver)
+        if err != nil {
+            return err
+        }
+        resolver.UpdateQuery(q)
+        q.AndWhere(expr)
+        return nil
+    }
+
+    _, findErr := dao.FindRecordById(record.Collection().Id, record.Id, ruleFunc)
+
+    return findErr == nil
+}
+
 // hasAuthManageAccess checks whether the client is allowed to have full
 // [forms.RecordUpsert] auth management permissions
 // (aka. allowing to change system auth fields without oldPassword).
-func hasAuthManageAccess(
+func original_hasAuthManageAccess(
 	dao *daos.Dao,
 	record *models.Record,
 	requestInfo *models.RequestInfo,

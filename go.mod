@@ -23,6 +23,7 @@ require (
 	github.com/goccy/go-json v0.10.3
 	github.com/godruoyi/go-snowflake v0.0.2
 	github.com/golang-jwt/jwt/v4 v4.5.0
+	github.com/joho/godotenv v1.5.1
 	github.com/labstack/echo/v5 v5.0.0-20230722203903-ec5b858dab61
 	github.com/lib/pq v1.10.9
 	github.com/mattn/go-sqlite3 v1.14.22
@@ -91,3 +92,5 @@ require (
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
 )
+
+replace github.com/AlperRehaYAZGAN/postgresbase => github.com/asternic/postgresbase v0.0.0-20250605213717-207f4c349317
