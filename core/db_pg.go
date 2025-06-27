@@ -28,58 +28,6 @@ func DefaultVaultConfig() *VaultConfig {
 	}
 }
 
-func old_resolveConnectionString(ctx context.Context, cfg *VaultConfig, connStr string) (string, error) {
-	// Handle dynamic credentials case
-	if isDynamicCreds(connStr) {
-		return getDynamicCreds(ctx, cfg, connStr)
-	}
-
-	// Original resolution logic for static credentials
-	parts := strings.Split(connStr, "://")
-	if len(parts) != 2 {
-		return connStr, nil // Not a standard connection string, return as-is
-	}
-
-	credsAndRest := strings.Split(parts[1], "@")
-	if len(credsAndRest) != 2 {
-		return connStr, nil // No credentials in standard format, return as-is
-	}
-
-	creds := strings.Split(credsAndRest[0], ":")
-	if len(creds) != 2 {
-		return connStr, nil // No password or not in user:pass format
-	}
-
-	// Check if username or password are Vault references
-	resolve := func(value string) (string, error) {
-		if strings.HasPrefix(value, "vault:") {
-			path, field, err := parseVaultRef(value)
-			if err != nil {
-				return "", err
-			}
-			return getFromVault(ctx, cfg, path, field)
-		}
-		return value, nil
-	}
-
-	username, err := resolve(creds[0])
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve username: %w", err)
-	}
-
-	password, err := resolve(creds[1])
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve password: %w", err)
-	}
-
-	// Reconstruct the connection string
-	return fmt.Sprintf("%s://%s:%s@%s",
-		parts[0],
-		username,
-		password,
-		credsAndRest[1]), nil
-}
-
 func connectDB(dbPath string) (*dbx.DB, error) {
 	var connStr string
 	if strings.Contains(dbPath, "logs.db") {
