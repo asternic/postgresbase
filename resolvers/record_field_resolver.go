@@ -252,9 +252,6 @@ func (r *RecordFieldResolver) getDriverName() string {
 }
 
 func (r *RecordFieldResolver) UpdateQuery(query *dbx.SelectQuery) error {
-    fmt.Println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-    fmt.Println("!!! USING MY MODIFIED RecordFieldResolver.UpdateQuery V-Option2 !!!")
-    fmt.Println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 
     if len(r.joins) == 0 {
         fmt.Println("DEBUG: RecordFieldResolver - No joins, no DISTINCT needed by this logic.")
