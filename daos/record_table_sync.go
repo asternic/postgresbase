@@ -297,7 +297,7 @@ func (dao *Dao) dropCollectionIndex(collection *models.Collection) error {
 				continue
 			}
 
-			if _, err := txDao.DB().NewQuery(fmt.Sprintf("DROP INDEX IF EXISTS [[%s]]", parsed.IndexName)).Execute(); err != nil {
+			if _, err := txDao.DB().NewQuery(fmt.Sprintf("DROP INDEX IF EXISTS %s", parsed.IndexName)).Execute(); err != nil {
 				return err
 			}
 		}
