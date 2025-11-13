@@ -92,8 +92,8 @@ docker run -d --name postgresbase \
     -p 8090:8090 \
     -e LOGS_DATABASE="postgresql://user:pass@<postgres-ip>:5432/logs?sslmode=disable" \
     -e DATABASE="postgresql://user:pass@<postgres-ip>:5432/postgres?sslmode=disable" \
-    -e JWT_PRIVATE_KEY="$(cat $PWD/keys/private.pem)" \
-    -e JWT_PUBLIC_KEY="$(cat $PWD/keys/public.pem)" \
+    -e JWT_PRIVATE_KEY_FILE=./keys/private.pem" \
+    -e JWT_PUBLIC_KEY=./keys/public.pem" \
     <your-name>/postgresbase:1.0.0
 ```
 
