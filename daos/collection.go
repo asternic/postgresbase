@@ -178,6 +178,58 @@ func (dao *Dao) DeleteCollection(collection *models.Collection) error {
 // If collection.IsNew() is true, the method will perform a create, otherwise an update.
 // To explicitly mark a collection for update you can use collection.MarkAsNotNew().
 func (dao *Dao) SaveCollection(collection *models.Collection) error {
+    var oldCollection *models.Collection
+
+    if !collection.IsNew() {
+        // Get the existing collection state to compare with the new one
+        var findErr error
+        oldCollection, findErr = dao.FindCollectionByNameOrId(collection.Id)
+        if findErr != nil {
+            return findErr
+        }
+    }
+
+    // Set default collection type
+    if collection.Type == "" {
+        collection.Type = models.CollectionTypeBase
+    }
+
+    if collection.Type == models.CollectionTypeView {
+        rootDb := dao.RootDB()
+        if rootDb == nil {
+            return errors.New("SaveCollection: rootDB is not available for view collections")
+        }
+        return dao.RunInTransaction(func(txDao *Dao) error {
+            return txDao.saveViewCollection(rootDb, collection, oldCollection)
+        })
+    }
+
+    // Non-view collections (base, auth, etc.)
+    txErr := dao.RunInTransaction(func(txDao *Dao) error {
+        // Persist the collection model
+        if err := txDao.Save(collection); err != nil {
+            return err
+        }
+        // Sync the changes with the related records table
+        if err := txDao.SyncRecordTableSchema(collection, oldCollection); err != nil {
+            return err
+        }
+        return nil
+    })
+
+    if txErr != nil {
+        return txErr
+    }
+
+    // Trigger view updates only if rootDB is available
+    if rootDb := dao.RootDB(); rootDb != nil {
+        // Ignore errors to allow users to update view queries from the UI
+        dao.resaveViewsWithChangedSchema(rootDb, collection.Id)
+    }
+
+    return nil
+}
+func (dao *Dao) old_SaveCollection(collection *models.Collection) error {
 	var oldCollection *models.Collection
 
 	if !collection.IsNew() {
