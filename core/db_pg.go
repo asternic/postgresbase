@@ -268,12 +268,26 @@ func getStaticSecretFromVault(ctx context.Context, cfg *VaultConfig, vaultRef st
 
 // ensurePostgresFunctions ensures that required PostgreSQL functions exist
 func ensurePostgresFunctions(db *dbx.DB) error {
-	_, err := db.NewQuery(`
+	fmt.Println("DEBUG: Starting ensurePostgresFunctions...")
+
+	result, err := db.NewQuery(`
 		-- Create or replace json_valid function
 		CREATE OR REPLACE FUNCTION json_valid(p_json text) RETURNS boolean AS $$
 		BEGIN
 			RETURN (p_json::json IS NOT NULL);
 			EXCEPTION WHEN OTHERS THEN RETURN false;
+		END;
+		$$ LANGUAGE plpgsql IMMUTABLE;
+
+		CREATE OR REPLACE FUNCTION json_valid(p_json json) RETURNS boolean AS $$
+		BEGIN
+			RETURN true;
+		END;
+		$$ LANGUAGE plpgsql IMMUTABLE;
+
+		CREATE OR REPLACE FUNCTION json_valid(p_json jsonb) RETURNS boolean AS $$
+		BEGIN
+			RETURN true;
 		END;
 		$$ LANGUAGE plpgsql IMMUTABLE;
 
@@ -284,31 +298,15 @@ func ensurePostgresFunctions(db *dbx.DB) error {
 			RETURN json_data ->> key;
 		END;
 		$$ LANGUAGE plpgsql;
-
-		-- Create or replace snowflake ID generation function
-		CREATE SEQUENCE IF NOT EXISTS global_id_seq;
-		CREATE OR REPLACE FUNCTION generate_snowflake(OUT result text) AS $$
-		DECLARE
-			our_epoch bigint := 1314220021721;
-			seq_id bigint;
-			now_millis bigint;
-			shard_id int := 5;
-			resultint bigint;
-		BEGIN
-			SELECT nextval('global_id_seq')::bigint % 1024 INTO seq_id;
-			SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000) INTO now_millis;
-			resultint := (now_millis - our_epoch) << 23;
-			resultint := resultint | (shard_id <<10);
-			resultint := resultint | (seq_id);
-			-- convert result from bigint to text
-			result := resultint::text;
-		END;
-		$$ LANGUAGE PLPGSQL;
 	`).Execute()
 
 	if err != nil {
+		fmt.Printf("DEBUG: Error creating PostgreSQL functions: %v\n", err)
 		return fmt.Errorf("failed to create PostgreSQL functions: %w", err)
 	}
+
+	fmt.Printf("DEBUG: PostgreSQL functions created successfully. Result: %v\n", result)
+	fmt.Println("DEBUG: Finished ensurePostgresFunctions")
 
 	return nil
 }
