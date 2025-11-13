@@ -263,10 +263,20 @@ func (dao *Dao) FindRecordByViewFile(
 	if opt, ok := qf.original.Options.(schema.MultiValuer); !ok || !opt.IsMultiple() {
 		query.AndWhere(dbx.HashExp{cleanFieldName: filename})
 	} else {
-		query.InnerJoin(fmt.Sprintf(
-			`json_each(CASE WHEN json_valid([[%s]]) THEN [[%s]] ELSE json_array([[%s]]) END) as {{_je_file}}`,
-			cleanFieldName, cleanFieldName, cleanFieldName,
-		), dbx.HashExp{"_je_file.value": filename})
+		// PostgreSQL requires casting JSON values to text for comparison
+		if dao.IsPostgreSQL() {
+			query.InnerJoin(fmt.Sprintf(
+				`json_array_elements(CASE WHEN json_valid([[%s]]) THEN [[%s]] ELSE json_array([[%s]]) END) as {{_je_file}}`,
+				cleanFieldName, cleanFieldName, cleanFieldName,
+			), dbx.NewExp("{{_je_file.value}}::text = {:filename}", dbx.Params{
+				"filename": filename,
+			}))
+		} else {
+			query.InnerJoin(fmt.Sprintf(
+				`json_each(CASE WHEN json_valid([[%s]]) THEN [[%s]] ELSE json_array([[%s]]) END) as {{_je_file}}`,
+				cleanFieldName, cleanFieldName, cleanFieldName,
+			), dbx.HashExp{"_je_file.value": filename})
+		}
 	}
 
 	if err := query.One(record); err != nil {

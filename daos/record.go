@@ -686,12 +686,22 @@ func (dao *Dao) cascadeRecordDelete(mainRecord *models.Record, refs map[*models.
 			if opt, ok := field.Options.(schema.MultiValuer); !ok || !opt.IsMultiple() {
 				query.AndWhere(dbx.HashExp{prefixedFieldName: mainRecord.Id})
 			} else {
-				query.AndWhere(dbx.Exists(dbx.NewExp(fmt.Sprintf(
-					`SELECT 1 FROM json_each(CASE WHEN json_valid([[%s]]) THEN [[%s]] ELSE json_array([[%s]]) END) {{__je__}} WHERE [[__je__.value]]={:jevalue}`,
-					prefixedFieldName, prefixedFieldName, prefixedFieldName,
-				), dbx.Params{
-					"jevalue": mainRecord.Id,
-				})))
+				// PostgreSQL requires casting JSON values to text for comparison
+				if dao.IsPostgreSQL() {
+					query.AndWhere(dbx.Exists(dbx.NewExp(fmt.Sprintf(
+						`SELECT 1 FROM json_array_elements(CASE WHEN json_valid([[%s]]) THEN [[%s]] ELSE json_array([[%s]]) END) {{__je__}} WHERE [[__je__.value]]::text = {:jevalue}`,
+						prefixedFieldName, prefixedFieldName, prefixedFieldName,
+					), dbx.Params{
+						"jevalue": mainRecord.Id,
+					})))
+				} else {
+					query.AndWhere(dbx.Exists(dbx.NewExp(fmt.Sprintf(
+						`SELECT 1 FROM json_each(CASE WHEN json_valid([[%s]]) THEN [[%s]] ELSE json_array([[%s]]) END) {{__je__}} WHERE [[__je__.value]]={:jevalue}`,
+						prefixedFieldName, prefixedFieldName, prefixedFieldName,
+					), dbx.Params{
+						"jevalue": mainRecord.Id,
+					})))
+				}
 			}
 
 			if refCollection.Id == mainRecord.Collection().Id {

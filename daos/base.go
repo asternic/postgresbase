@@ -104,6 +104,18 @@ func (dao *Dao) RootDB() *dbx.DB {
 	return dao.rootDB
 }
 
+// IsPostgreSQL returns true if the database is PostgreSQL.
+func (dao *Dao) IsPostgreSQL() bool {
+	if dao.rootDB != nil {
+		return dao.rootDB.DriverName() == "postgres"
+	}
+	// Fallback: check the concurrent DB if it's a *dbx.DB
+	if db, ok := dao.concurrentDB.(*dbx.DB); ok {
+		return db.DriverName() == "postgres"
+	}
+	return false
+}
+
 // Clone returns a new Dao with the same configuration options as the current one.
 func (dao *Dao) Clone() *Dao {
 	clone := *dao
