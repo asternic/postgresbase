@@ -16,6 +16,9 @@ type ResolverResult struct {
 	// in the final db expression as left or right operand.
 	Identifier string
 
+	// IsJson indicates whether the resolved field is a json type.
+	IsJson bool
+
 	// NoCoalesce instructs to not use COALESCE or NULL fallbacks
 	// when building the identifier expression.
 	NoCoalesce bool
@@ -104,6 +107,7 @@ func (r *SimpleFieldResolver) Resolve(field string) (*ResolverResult, error) {
 
 	return &ResolverResult{
 		NoCoalesce: true,
+		IsJson:     true,
 		Identifier: fmt.Sprintf(
 			"JSON_EXTRACT([[%s]], '%s')",
 			inflector.Columnify(parts[0]),

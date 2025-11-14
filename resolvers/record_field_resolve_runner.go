@@ -462,15 +462,18 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 				result.MultiMatchSubQuery = r.multiMatch
 			}
 
-			// wrap in json_extract to ensure that top-level primitives
-			// stored as json work correctly when compared to their SQL equivalent
-			// (https://github.com/pocketbase/pocketbase/issues/4068)
-			if field.Type == schema.FieldTypeJson {
-				result.NoCoalesce = true
-				result.Identifier = dbutils.JsonExtract(r.activeTableAlias+"."+cleanFieldName, "")
-				if r.withMultiMatch {
-					r.multiMatch.valueIdentifier = dbutils.JsonExtract(r.multiMatchActiveTableAlias+"."+cleanFieldName, "")
+			isJsonLike := field.Type == schema.FieldTypeJson
+
+			if !isJsonLike && field.Type == schema.FieldTypeRelation {
+				field.InitOptions()
+				if options, ok := field.Options.(*schema.RelationOptions); ok && options.IsMultiple() {
+					isJsonLike = true
 				}
+			}
+
+			if isJsonLike {
+				result.IsJson = true
+				result.NoCoalesce = true
 			}
 
 			return result, nil

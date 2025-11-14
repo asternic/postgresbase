@@ -153,18 +153,38 @@ func buildResolversExpr(
 	case fexpr.SignNeq, fexpr.SignAnyNeq:
 		expr = resolveEqualExpr(false, left, right)
 	case fexpr.SignLike, fexpr.SignAnyLike:
-		// the right side is a column and therefor wrap it with "%" for contains like behavior
-		if len(right.Params) == 0 {
-			expr = dbx.NewExp(fmt.Sprintf("%s LIKE ('%%' || %s || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
+		// Check if we're dealing with a JSON field
+		if left.IsJson || right.IsJson {
+			// For JSON fields, use PostgreSQL JSON operators instead of ILIKE
+			if len(right.Params) == 0 {
+				expr = dbx.NewExp(fmt.Sprintf("%s::text ILIKE ('%%' || %s::text || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
+			} else {
+				expr = dbx.NewExp(fmt.Sprintf("%s::text ILIKE %s::text ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
+			}
 		} else {
-			expr = dbx.NewExp(fmt.Sprintf("%s LIKE %s ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
+			// the right side is a column and therefor wrap it with "%%" for contains like behavior
+			if len(right.Params) == 0 {
+				expr = dbx.NewExp(fmt.Sprintf("%s ILIKE ('%%' || %s || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
+			} else {
+				expr = dbx.NewExp(fmt.Sprintf("%s ILIKE %s ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
+			}
 		}
 	case fexpr.SignNlike, fexpr.SignAnyNlike:
-		// the right side is a column and therefor wrap it with "%" for not-contains like behavior
-		if len(right.Params) == 0 {
-			expr = dbx.NewExp(fmt.Sprintf("%s NOT LIKE ('%%' || %s || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
+		// Check if we're dealing with a JSON field
+		if left.IsJson || right.IsJson {
+			// For JSON fields, use PostgreSQL JSON operators instead of NOT ILIKE
+			if len(right.Params) == 0 {
+				expr = dbx.NewExp(fmt.Sprintf("%s::text NOT ILIKE ('%%' || %s::text || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
+			} else {
+				expr = dbx.NewExp(fmt.Sprintf("%s::text NOT ILIKE %s::text ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
+			}
 		} else {
-			expr = dbx.NewExp(fmt.Sprintf("%s NOT LIKE %s ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
+			// the right side is a column and therefor wrap it with "%%" for not-contains like behavior
+			if len(right.Params) == 0 {
+				expr = dbx.NewExp(fmt.Sprintf("%s NOT ILIKE ('%%' || %s || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
+			} else {
+				expr = dbx.NewExp(fmt.Sprintf("%s NOT ILIKE %s ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
+			}
 		}
 	case fexpr.SignLt, fexpr.SignAnyLt:
 		expr = dbx.NewExp(fmt.Sprintf("%s < %s", left.Identifier, right.Identifier), mergeParams(left.Params, right.Params))
@@ -402,6 +422,8 @@ func isEmptyIdentifier(result *ResolverResult) bool {
 		return false
 	}
 }
+
+
 
 func isAnyMatchOp(op fexpr.SignOp) bool {
 	switch op {
